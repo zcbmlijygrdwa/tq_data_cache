@@ -24,8 +24,9 @@ from utils import getData
 from utils import NormalizeData
 
 #commision_rate = 0.000
+commision_rate = 1.0/10000.0
 #commision_rate = 0.001
-commision_rate = 0.005
+#commision_rate = 0.005
 
 #window_size = 1
 #window_size = 2
@@ -54,11 +55,11 @@ def trade_env_sim(temp_model, data_np, log_info=False):
     #window_step = 150
     #window_step = 200
     #window_step = 300
-    #window_step = 500
+    #window_step = 499
 
 
-    #leverage = 1
-    leverage = 10
+    leverage = 1
+    #leverage = 10
 
     maintainance_margin_ratio = 0.5
     
@@ -67,9 +68,15 @@ def trade_env_sim(temp_model, data_np, log_info=False):
     status['buys'] = []
     status['sells'] = []
     status['balances'] = []
+    status['actions'] = []
 
 
     total_balance = 0
+
+    max_draw_down = 0
+    max_draw_down_max = -1
+
+    num_trades = 0
     
     if True:
         #holding = torch.tensor([0], dtype=float, requires_grad=True)
@@ -79,6 +86,7 @@ def trade_env_sim(temp_model, data_np, log_info=False):
         balance_borrowed = (leverage-1)*balance
         holdings = []
         hold_time = 0
+        bankrupted = False
         for idx in range(window_size+1, data_np.shape[0], window_step):
 
             margin_force_sell = False
@@ -121,67 +129,9 @@ def trade_env_sim(temp_model, data_np, log_info=False):
                   #print("maintainance_margin")
                   #print(maintainance_margin)
                   ##exit()
-                  action = 0
+                  action = torch.tensor(0)
                   need_inference = False
 
-
-            # perform inferance
-            if need_inference:
-              # normalize data
-              input_np = NormalizeData(input_np)
-
-              #input_ts = torch.from_numpy(data_normalized).to(torch.float32)
-              input_ts = torch.from_numpy(input_np).to(torch.float32)
-
-              rows = input_ts.shape[0]
-              cols = input_ts.shape[1]
-              #for i in range(0, cols):
-              #    input_ts[:,i]  = (input_ts[:,i] - input_ts[:,i].mean(0)) / input_ts[:,i].std(0)
-              input_ts = input_ts.reshape(rows*cols)
-
-              #print(input_ts)
-              #exit()
-
-              out = temp_model(input_ts)
-              action = torch.argmax(out, dim=0)
-
-            if(action == 0): # sell
-              if len(holdings)>0:
-                if log_info:
-                    status['sells'].append(len(status['prices'])-1)
-                balance = 0
-                for holding in holdings:
-                  unit = holding[0]
-                  price = holding[1]
-                  balance += avg_price*unit
-                balance -= balance_borrowed
-
-                # commision
-                balance = balance * (1-commision_rate)
-
-                balance_leveraged = balance*leverage
-                balance_borrowed = (leverage-1)*balance
-                holdings = []
-                hold_time = 0
-                #print("Sell at [%f], balance = [%f]"%(avg_price, balance))
-              #else:
-              #  do_noting
-            elif(action == 1): # wait
-                #do nothing
-                a = 1
-            elif(action == 2): # buy
-                if(len(holdings) == 0):
-                    #print("Buy!")
-                    if log_info:
-                        status['buys'].append(len(status['prices'])-1)
-                    unit = balance_leveraged / avg_price
-                    holdings.append((unit, avg_price))
-                    balance_leveraged = 0
-                    balance = 0
-                    #print("Buy at [%f]"%(avg_price))
-            else:
-              print("Error: Unknown actioan: [%d]"%(action))
-              exit()
 
             #if margin_force_sell:
             #  print("holdings")
@@ -197,31 +147,126 @@ def trade_env_sim(temp_model, data_np, log_info=False):
             #  print(balance_borrowed)
             #  exit()
 
+            # perform inferance
+            if need_inference:
+              # normalize data
+              input_np = NormalizeData(input_np)
+
+              #input_ts = torch.from_numpy(data_normalized).to(torch.float32)
+              input_ts = torch.from_numpy(input_np).to(torch.float32)
+
+              rows = input_ts.shape[0]
+              cols = input_ts.shape[1]
+              #for i in range(0, cols):
+              #    input_ts[:,i]  = (input_ts[:,i] - input_ts[:,i].mean(0)) / input_ts[:,i].std(0)
+              input_ts = input_ts.reshape(rows*cols)
+
+              # add positions information
+              # 当前仓位，注意：这是执行本次 action 之前的仓位
+              position = 1.0 if len(holdings) > 0 else 0.0
+
+              input_ts = torch.cat([
+                  input_ts,
+                  torch.tensor([position], dtype=torch.float32)
+              ])
+
+              #if idx == window_size+1:
+              #    print(input_ts)
+              #    print(input_ts.shape)
+
+              out = temp_model(input_ts)
+              action = torch.argmax(out, dim=0)
+              #print("action = %d"%(action.item()))
+
+            status['actions'].append(action.item())
+            if(action == 0): # sell
+              if len(holdings)>0:
+                if log_info:
+                    status['sells'].append(len(status['prices'])-1)
+                balance = 0
+                for holding in holdings:
+                  unit = holding[0]
+                  price = holding[1]
+                  balance += avg_price*unit
+                balance -= balance_borrowed
+
+                # commision
+                balance = balance * (1-commision_rate)
+
+                balance_leveraged = balance*leverage
+
+                balance_borrowed = (leverage-1)*balance
+                holdings = []
+                hold_time = 0
+                #print("Sell at [%f], balance = [%f]"%(avg_price, balance))
+                num_trades += 1
+
+                # if price change too fast, balance can be negative, bankrupt
+                if balance_leveraged < 0:
+                  print("Bankrupted!")
+                  print("balance_leveraged [%f]"%(balance_leveraged))
+                  bankrupted = True
+              #else:
+              #  do_noting
+            elif(action == 1): # wait
+                #do nothing
+                a = 1
+            elif(action == 2): # buy
+                if(len(holdings) == 0):
+                    #print("Buy!")
+                    num_trades += 1
+                    if log_info:
+                        status['buys'].append(len(status['prices'])-1)
+                    unit = balance_leveraged / avg_price
+                    if(unit < 0):
+                        print("unit")
+                        print(unit)
+                        print("balance_leveraged")
+                        print(balance_leveraged)
+                        print("avg_price")
+                        print(avg_price)
+                        exit()
+                    holdings.append((unit, avg_price))
+                    balance_leveraged = 0
+                    balance = 0
+                    #print("Buy at [%f]"%(avg_price))
+            else:
+              print("Error: Unknown actioan: [%d]"%(action))
+              exit()
+
+            if len(holdings) > 0:
+                current_asset_value = get_asset_value(avg_price, holdings)
+                temp_balance = current_asset_value - balance_borrowed
+            else:
+                temp_balance = balance
+
+            if temp_balance > max_draw_down_max:
+              max_draw_down_max = temp_balance
+              max_draw_down = 0
+
+            max_draw_down = max(max_draw_down, max_draw_down_max - temp_balance)
+            #print("balance = %f, max_draw_down = %f"%(temp_balance, max_draw_down))
+
             if log_info:
+                status['balances'].append(temp_balance)
                 if len(holdings) > 0:
-                    current_asset_value = get_asset_value(avg_price, holdings)
-                    status['balances'].append(current_asset_value - balance_borrowed)
                     if(current_asset_value < 1 ):
                       print("holdings")
                       print(holdings)
                       print("current_asset_value")
                       print(current_asset_value)
+                      print("strange state.")
                       exit()
-                else:
-                    #if(balance < 1):
-                    #  print("holdings")
-                    #  print(holdings)
-                    #  print("balance")
-                    #  print(balance)
-                    #  exit()
-                    status['balances'].append(balance)
-
+            if bankrupted:
+              break
 
         
         # force sell at end
         if len(holdings) > 0:
             balance = 0
             if len(holdings)>0:
+              num_trades += 1
+              status['sells'].append(len(status['prices'])-1)
               for holding in holdings:
                 unit = holding[0]
                 price = holding[1]
@@ -238,6 +283,12 @@ def trade_env_sim(temp_model, data_np, log_info=False):
             #print("Final sell at [%f], balance = [%f]"%(avg_price, balance))
         total_balance += balance
 
+    # sanity check
+    if log_info:
+      assert num_trades == len(status['buys']) + len(status["sells"])
+
+    status['max_draw_down'] = max_draw_down/max_draw_down_max
+
     #return total_balance, temp_model
-    return total_balance, status
+    return total_balance, num_trades, status
 

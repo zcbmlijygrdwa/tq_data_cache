@@ -21,6 +21,10 @@ def NormalizeData(input_np):
     price_max = np.max(input_np[:,0:4])
     price_min = np.min(input_np[:,0:4])
     price_range = price_max-price_min
+    if(price_range == 0):
+      print("Error: price range = 0")
+      print(input_np)
+      exit()
     input_np[:,0:4] = input_np[:,0:4] - (price_min + price_range/2.0)
     input_np[:,0:4] = input_np[:,0:4] / (price_range/2.0)
     #print("max")
@@ -109,12 +113,18 @@ def read_data(input_files, data_folder):
     return data_map
 
 def data_dict_to_data_np(data_dict):
+    data_list_time_of_day=    data_dict["data_list_time_of_day"]
     data_list_open=           data_dict["data_list_open"]
     data_list_high=           data_dict["data_list_high"]
     data_list_low=            data_dict["data_list_low"]
     data_list_close=          data_dict["data_list_close"]
     data_list_volume=         data_dict["data_list_volume"]
     data_list_open_interest=  data_dict["data_list_open_interest"]
+
+    # encode data_list_time_of_day
+    data_list_time_of_day_np = np.array(data_list_time_of_day)
+    sin_time = np.sin(2 * np.pi * data_list_time_of_day_np)
+    cos_time = np.cos(2 * np.pi * data_list_time_of_day_np)
     
     # Combine all features
     data_np = np.array([
@@ -123,7 +133,11 @@ def data_dict_to_data_np(data_dict):
         data_list_low,
         data_list_close,
         data_list_volume,
-        data_list_open_interest
-    ]).T  # shape (N, 6)
+        data_list_open_interest,
+    ]).T  # shape (N, 8)
+
+    # add sin time and cos time
+    data_np = np.column_stack([data_np, sin_time])
+    data_np = np.column_stack([data_np, cos_time])
     
     return data_np

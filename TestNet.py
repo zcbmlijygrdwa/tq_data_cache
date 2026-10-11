@@ -17,6 +17,7 @@ class NetBlock(nn.Module):
     def forward(self, x):
         x = self.fc(x)
         x = self.layer_norm(x)
+        x = torch.tanh(x) # 激活层
 
         return x
 
@@ -24,12 +25,13 @@ class Net(nn.Module):
 
     def __init__(self, input_dim):
         super(Net, self).__init__()
+        self.mid_width = 8
+        #self.mid_width = 32
         #self.mid_width = 128
         #self.mid_width = 256
         #self.mid_width = 512
-        self.mid_width = input_dim
+        #self.mid_width = input_dim
         self.output = 3
-
 
         self.nb1 = NetBlock(input_dim, self.mid_width)
         #self.nb2 = NetBlock(self.mid_width, self.mid_width)
@@ -53,7 +55,7 @@ class Net(nn.Module):
 
     def forward(self, x):
 
-        #x = self.nb1(x)
+        x = self.nb1(x)
         #res = x
         #x = self.nb2(x)
         #x += res
@@ -100,13 +102,27 @@ class Net(nn.Module):
 
         return x
 
+class NetLight(nn.Module):
+
+    def __init__(self, input_dim):
+        super(NetLight, self).__init__()
+        self.output = 3
+
+        self.fc_final = nn.Linear(input_dim, self.output)
+
+    def forward(self, x):
+
+        x = self.fc_final(x)
+
+        return x
+
 class MyNet(nn.Module):
 
     def __init__(self, input_dim):
         super(MyNet, self).__init__()
-        #self.mid_width = 128
-        #self.mid_width = 256
+
         self.net = Net(input_dim)
+        #self.net = NetLight(input_dim)
 
 
     def forward(self, x):
@@ -114,4 +130,3 @@ class MyNet(nn.Module):
         x = self.net(x)
 
         return x
-
